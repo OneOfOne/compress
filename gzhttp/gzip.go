@@ -45,6 +45,8 @@ const (
 	// That being the case, you should restrict the gzip compression to files with a size (plus header) greater than a single packet,
 	// 1024 bytes (1KB) is therefore default.
 	DefaultMinSize = 1024
+
+	MaxBufferSize = 32 << 10 // 32KiB
 )
 
 // GzipResponseWriter provides an http.ResponseWriter interface, which gzips
@@ -316,8 +318,26 @@ func (w *GzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // verify Hijacker interface implementation
 var _ http.Hijacker = &GzipResponseWriter{}
 
-var onceDefault sync.Once
-var defaultWrapper func(http.Handler) http.HandlerFunc
+var (
+	onceDefault    sync.Once
+	defaultWrapper func(http.Handler) http.HandlerFunc
+)
+
+func Get(level int) *GzipResponseWriter {
+	gw := grwPool.Get().(*GzipResponseWriter)
+	gw.level = level
+	return gw
+}
+
+func Put(grw *GzipResponseWriter) {
+	grw.ResponseWriter = nil
+	n := len(grw.buf)
+	if n > MaxBufferSize {
+		n = MaxBufferSize
+	}
+	grw.buf = grw.buf[:0:n]
+	grwPool.Put(grw)
+}
 
 // GzipHandler allows to easily wrap an http handler with default settings.
 func GzipHandler(h http.Handler) http.HandlerFunc {
@@ -332,7 +352,28 @@ func GzipHandler(h http.Handler) http.HandlerFunc {
 	return defaultWrapper(h)
 }
 
-var grwPool = sync.Pool{New: func() interface{} { return &GzipResponseWriter{} }}
+var grwPool = sync.Pool{
+	New: func() interface{} {
+		c := &config{
+			level:   gzip.DefaultCompression,
+			minSize: DefaultMinSize,
+			writer: writer.GzipWriterFactory{
+				Levels: gzkp.Levels,
+				New:    gzkp.NewWriter,
+			},
+			contentTypes: DefaultContentTypeFilter,
+		}
+
+		return &GzipResponseWriter{
+			gwFactory:         c.writer,
+			level:             c.level,
+			minSize:           c.minSize,
+			contentTypeFilter: c.contentTypes,
+			keepAcceptRanges:  c.keepAcceptRanges,
+			buf:               make([]byte, 0, 1024),
+		}
+	},
+}
 
 // NewWrapper returns a reusable wrapper with the supplied options.
 func NewWrapper(opts ...option) (func(http.Handler) http.HandlerFunc, error) {
