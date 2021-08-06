@@ -45,8 +45,6 @@ const (
 	// That being the case, you should restrict the gzip compression to files with a size (plus header) greater than a single packet,
 	// 1024 bytes (1KB) is therefore default.
 	DefaultMinSize = 1024
-
-	MaxBufferSize = 32 << 10 // 32KiB
 )
 
 // GzipResponseWriter provides an http.ResponseWriter interface, which gzips
@@ -332,8 +330,8 @@ func Get(level int) *GzipResponseWriter {
 func Put(grw *GzipResponseWriter) {
 	grw.ResponseWriter = nil
 	n := len(grw.buf)
-	if n > MaxBufferSize {
-		n = MaxBufferSize
+	if n > DefaultMinSize {
+		n = DefaultMinSize
 	}
 	grw.buf = grw.buf[:0:n]
 	grwPool.Put(grw)
